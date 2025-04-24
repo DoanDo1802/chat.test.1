@@ -54,7 +54,8 @@ class ProcessManager:
                 processed_response = ProcessManager.process_response(prompt, response, processor_id)
 
                 # Đưa kết quả đã xử lý vào hàng đợi đầu ra
-                output_queue.put((request_id, prompt, processed_response))
+                # Thông tin tiến trình được truyền qua processor_id
+                output_queue.put((request_id, prompt, processed_response, processor_id))
 
             except queue.Empty:
                 # Hàng đợi trống, tiếp tục vòng lặp
@@ -81,17 +82,14 @@ class ProcessManager:
         # Mô phỏng xử lý nặng bằng cách ngủ một chút
         time.sleep(0.2)
 
-        # Thêm thông tin về tiến trình xử lý
-        processed = f"[Xử lý bởi tiến trình {processor_id}]\n\n"
-
         # Thêm thông tin về câu hỏi
-        processed += f"Câu hỏi: {prompt}\n\n"
+        processed = f"Câu hỏi: {prompt}\n\n"
 
-        # Thêm phản hồi
-        processed += f"Trả lời:\n{response}\n"
+        # Thêm phản hồi (không thêm "Trả lời:" để tránh trùng lặp)
+        processed += f"{response}"
 
-        # Thêm thời gian xử lý
-        processed += f"\n[Hoàn thành lúc: {time.strftime('%H:%M:%S')}]"
+        # Thông tin về tiến trình xử lý được chuyển xuống phần chữ nhỏ phía dưới
+        # sẽ được xử lý trong app.py
 
         return processed
 
@@ -147,6 +145,10 @@ class ProcessManager:
         """
         responses = []
         while not self.output_queue.empty():
-            responses.append(self.output_queue.get())
+            # Lấy dữ liệu từ hàng đợi (request_id, prompt, processed_response, processor_id)
+            data = self.output_queue.get()
+
+            # Trả về toàn bộ dữ liệu bao gồm processor_id
+            responses.append(data)
 
         return responses

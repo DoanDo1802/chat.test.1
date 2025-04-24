@@ -147,7 +147,7 @@ process_manager = ProcessManager()
 thread_manager.start()
 process_manager.start()
 
-# Thêm nhiều yêu cầu
+# Thêm yêu cầu
 questions = [
     "Hãy giải thích về đa luồng trong Python",
     "Hãy giải thích về đa tiến trình trong Python",

@@ -12,7 +12,8 @@ from flask_cors import CORS
 import google.generativeai as genai
 
 # Import cấu hình từ config.py
-from config import GEMINI_API_KEY, GEMINI_MODEL, MAX_THREADS, REQUEST_TIMEOUT
+from config import GEMINI_API_KEY, GEMINI_MODEL, MAX_THREADS, MAX_PROCESSES, REQUEST_TIMEOUT
+from process_manager import ProcessManager
 
 import base64
 import os
@@ -155,8 +156,8 @@ class ThreadManager:
                 cpu_usage = round((start_cpu + end_cpu) / 2, 1)  # Sử dụng CPU trung bình (%)
                 memory_usage = round(end_memory - start_memory, 2)  # Sử dụng bộ nhớ (MB)
 
-                # Xử lý phản hồi
-                processed_response = {
+                # Tạo thông tin cơ bản về phản hồi
+                basic_response = {
                     "id": request_id,
                     "prompt": prompt,
                     "response": response,
@@ -171,9 +172,15 @@ class ThreadManager:
                     }
                 }
 
-                # Đưa kết quả vào hàng đợi phản hồi và dictionary
-                self.response_queue.put(processed_response)
-                self.responses_dict[request_id] = processed_response
+                # Đưa kết quả vào hàng đợi phản hồi
+                self.response_queue.put((request_id, prompt, response))
+
+                # Lưu thông tin cơ bản vào dictionary để theo dõi trạng thái
+                self.responses_dict[request_id] = basic_response
+
+                # Thêm nhiệm vụ xử lý vào ProcessManager
+                global process_manager
+                process_manager.add_task(request_id, prompt, response)
 
                 # Đánh dấu công việc đã hoàn thành
                 self.request_queue.task_done()
@@ -244,6 +251,21 @@ class ThreadManager:
         """
         return self.responses_dict.get(request_id)
 
+    def get_raw_response(self, request_id):
+        """
+        Lấy phản hồi gốc (chưa xử lý) theo request_id.
+
+        Args:
+            request_id (str): ID của yêu cầu
+
+        Returns:
+            tuple: (request_id, prompt, response) hoặc None nếu không tìm thấy
+        """
+        for item in list(self.response_queue.queue):
+            if isinstance(item, tuple) and len(item) >= 3 and item[0] == request_id:
+                return item
+        return None
+
     def get_all_responses(self):
         """
         Lấy tất cả các phản hồi.
@@ -269,9 +291,15 @@ class ThreadManager:
 app = Flask(__name__)
 CORS(app)  # Cho phép cross-origin requests
 
-# Khởi tạo ThreadManager
+# Khởi tạo ThreadManager và ProcessManager
 thread_manager = ThreadManager()
+process_manager = ProcessManager()
+
+# Bắt đầu các luồng và tiến trình
 thread_manager.start()
+process_manager.start()
+
+print(f"Đã khởi động {MAX_THREADS} luồng và {MAX_PROCESSES} tiến trình")
 
 @app.route('/')
 def index():
@@ -300,13 +328,42 @@ def ask():
 @app.route('/api/status/<request_id>', methods=['GET'])
 def status(request_id):
     """API endpoint để kiểm tra trạng thái của yêu cầu."""
-    response = thread_manager.get_response(request_id)
+    # Kiểm tra xem yêu cầu có trong responses_dict không
+    basic_response = thread_manager.get_response(request_id)
 
-    if response:
-        return jsonify({
-            "status": "completed",
-            "data": response
-        })
+    if basic_response:
+        # Kiểm tra xem có phản hồi đã xử lý từ ProcessManager không
+        processed_responses = process_manager.get_processed_responses()
+
+        # Tìm phản hồi đã xử lý với request_id tương ứng
+        processed_response = None
+        for resp in processed_responses:
+            if resp[0] == request_id:
+                processed_response = resp
+                break
+
+        if processed_response:
+            # Nếu có phản hồi đã xử lý, cập nhật thông tin
+            req_id, prompt, processed_text, processor_id = processed_response
+
+            # Cập nhật phản hồi với thông tin đã xử lý
+            updated_response = basic_response.copy()
+            updated_response["response"] = processed_text
+            updated_response["processed"] = True
+            # Đảm bảo hiển thị nhất quán thông tin tiến trình
+            updated_response["processor"] = f"Tiến trình {processor_id}"
+
+            return jsonify({
+                "status": "completed",
+                "data": updated_response
+            })
+        else:
+            # Nếu chưa có phản hồi đã xử lý, trả về phản hồi cơ bản
+            return jsonify({
+                "status": "completed",
+                "data": basic_response,
+                "processing_status": "waiting_for_process"
+            })
     else:
         # Kiểm tra xem yêu cầu có đang được xử lý không
         queue_size = thread_manager.request_queue.qsize()
@@ -318,12 +375,37 @@ def status(request_id):
 @app.route('/api/responses', methods=['GET'])
 def responses():
     """API endpoint để lấy tất cả các phản hồi."""
-    return jsonify(thread_manager.get_all_responses())
+    # Lấy tất cả phản hồi cơ bản từ ThreadManager
+    basic_responses = thread_manager.get_all_responses()
+
+    # Lấy tất cả phản hồi đã xử lý từ ProcessManager
+    processed_responses = process_manager.get_processed_responses()
+
+    # Tạo dictionary để tra cứu nhanh các phản hồi đã xử lý theo request_id
+    processed_dict = {}
+    processor_dict = {}
+    for resp in processed_responses:
+        req_id, _, processed_text, processor_id = resp
+        processed_dict[req_id] = processed_text
+        processor_dict[req_id] = processor_id
+
+    # Cập nhật phản hồi cơ bản với thông tin đã xử lý (nếu có)
+    for response in basic_responses:
+        req_id = response["id"]
+        if req_id in processed_dict:
+            response["response"] = processed_dict[req_id]
+            response["processed"] = True
+            if req_id in processor_dict:
+                # Đảm bảo hiển thị nhất quán thông tin tiến trình
+                response["processor"] = f"Tiến trình {processor_dict[req_id]}"
+
+    return jsonify(basic_responses)
 
 @app.route('/api/responses/clear', methods=['POST'])
 def clear_responses():
     """API endpoint để xóa tất cả các phản hồi."""
     thread_manager.clear_all_responses()
+    # Không cần xóa phản hồi từ ProcessManager vì chúng sẽ tự động bị xóa khi lấy ra
     return jsonify({"status": "success", "message": "Đã xóa tất cả lịch sử chat"})
 
 @app.route('/api/batch', methods=['POST'])
@@ -349,5 +431,11 @@ if __name__ == '__main__':
     # Tạo thư mục templates nếu chưa tồn tại
     os.makedirs('templates', exist_ok=True)
 
-    # Chạy ứng dụng Flask
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    try:
+        # Chạy ứng dụng Flask
+        app.run(debug=True, host='0.0.0.0', port=5000)
+    finally:
+        # Đảm bảo dừng tất cả các luồng và tiến trình khi ứng dụng kết thúc
+        thread_manager.stop()
+        process_manager.stop()
+        print("Đã dừng tất cả các luồng và tiến trình.")

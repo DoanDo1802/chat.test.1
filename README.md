@@ -83,6 +83,3 @@ Bạn có thể tùy chỉnh các thông số trong file `config.py`:
 - API key của Gemini (đăng ký tại https://ai.google.dev/)
 - Các thư viện: cập nhật trong requirements.txt 
 
-## Giấy phép
-
-[MIT License](LICENSE)

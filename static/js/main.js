@@ -157,12 +157,22 @@ function addBotMessage(message, responseData = null) {
         if (responseData.performance) {
             performanceInfo = ` | Thời gian: ${responseData.performance.time}s | CPU: ${responseData.performance.cpu}% | RAM: ${responseData.performance.memory}MB`;
         }
-        threadInfo = `<div class="thread-info">ID: ${responseData.id} | Xử lý bởi: ${responseData.thread}${performanceInfo}</div>`;
+
+        // Thêm thông tin processor nếu có
+        let processorInfo = '';
+        if (responseData.processor) {
+            processorInfo = ` | ${responseData.processor}`;
+        }
+
+        threadInfo = `<div class="thread-info">ID: ${responseData.id} | Xử lý bởi: ${responseData.thread}${processorInfo}${performanceInfo}</div>`;
     }
+
+    // Xử lý tin nhắn để loại bỏ phần "Câu hỏi: ..." nếu có
+    let processedMessage = processResponseForDisplay(message);
 
     const messageHtml = `
         <div class="message message-bot">
-            <div class="message-content">${marked.parse(message)}</div>
+            <div class="message-content">${marked.parse(processedMessage)}</div>
             ${threadInfo}
             <div class="message-time">${timestamp}</div>
         </div>
@@ -174,7 +184,7 @@ function addBotMessage(message, responseData = null) {
     // Lưu tin nhắn vào mảng
     chatMessages.unshift({
         type: 'bot',
-        content: message,
+        content: processedMessage,
         timestamp: timestamp,
         responseData: responseData
     });
@@ -266,6 +276,7 @@ async function loadHistoryToModal() {
                     <div class="card-body">
                         <h6 class="card-subtitle mb-2 text-muted">
                             Xử lý bởi: ${response.thread}
+                            ${response.processor ? ` | ${response.processor}` : ''}
                             ${response.performance ? ` | Thời gian: ${response.performance.time}s | CPU: ${response.performance.cpu}% | RAM: ${response.performance.memory}MB` : ''}
                         </h6>
                         <h5 class="card-title">Câu hỏi:</h5>
@@ -275,7 +286,7 @@ async function loadHistoryToModal() {
                             <img src="${response.imageData}" alt="Ảnh đính kèm" class="history-image">
                         </div>` : ''}
                         <h5 class="card-title">Trả lời:</h5>
-                        <div class="card-text">${marked.parse(response.response)}</div>
+                        <div class="card-text">${marked.parse(processResponseForDisplay(response.response))}</div>
                     </div>
                     <div class="card-footer">
                         <button class="btn btn-sm btn-primary load-conversation" data-id="${response.id}">
@@ -313,7 +324,24 @@ function loadConversationFromHistory(responseId, responses) {
     // Thêm tin nhắn người dùng và phản hồi vào cuộc trò chuyện
     const imageData = response.has_image && response.imageData ? response.imageData : null;
     addUserMessage(response.prompt, imageData);
+    // Xử lý phản hồi để loại bỏ phần "Câu hỏi:" nếu có
     addBotMessage(response.response, response);
+}
+
+// Hàm xử lý câu trả lời để loại bỏ phần "Câu hỏi:" nếu có
+function processResponseForDisplay(message) {
+    if (!message) return '';
+
+    // Kiểm tra nếu tin nhắn bắt đầu bằng "Câu hỏi:"
+    if (message.startsWith("Câu hỏi:")) {
+        // Tìm vị trí của dòng trống đầu tiên sau "Câu hỏi:"
+        const doubleNewlineIndex = message.indexOf("\n\n");
+        if (doubleNewlineIndex !== -1) {
+            // Loại bỏ phần "Câu hỏi: ..." và dòng trống
+            return message.substring(doubleNewlineIndex + 2);
+        }
+    }
+    return message;
 }
 
 // Xóa lịch sử chat
